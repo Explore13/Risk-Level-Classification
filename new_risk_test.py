@@ -3,7 +3,6 @@ from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification
 )
-from functools import lru_cache
 
 # =========================================================
 # HUGGING FACE MODEL NAME
@@ -11,27 +10,40 @@ from functools import lru_cache
 
 model_name = "sohampal0011/risk-classifier"
 
+# =========================================================
+# LOAD TOKENIZER
+# =========================================================
 
-@lru_cache(maxsize=1)
-def get_classifier():
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        low_cpu_mem_usage=True
-    )
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name
+)
 
-    return pipeline(
-        "text-classification",
-        model=model,
-        tokenizer=tokenizer
-    )
+# =========================================================
+# LOAD MODEL
+# =========================================================
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    model_name
+)
+
+# =========================================================
+# CREATE PIPELINE
+# =========================================================
+
+classifier = pipeline(
+    "text-classification",
+    model=model,
+    tokenizer=tokenizer
+)
+
+print("✅ Model loaded successfully from Hugging Face!")
 
 # =========================================================
 # PREDICTION FUNCTION
 # =========================================================
 
 def predict(text):
-    classifier = get_classifier()
+
     result = classifier(text)
 
     label = result[0]["label"]
