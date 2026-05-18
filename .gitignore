@@ -1,0 +1,25 @@
+# Virtual Environment
+risk_venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+tempCodeRunnerFile*
+
+# Environment Variables
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML Checkpoints / Weights
+checkpoint-*/
+*.pt
+*.pth
+*.bin
+*.safetensors
