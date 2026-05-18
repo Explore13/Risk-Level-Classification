@@ -3,13 +3,28 @@ from pydantic import BaseModel
 import shutil
 import os
 import speech_recognition as sr
-from googletrans import Translator
 from new_risk_test import predict
 import wave
+
+try:
+    from googletrans import Translator
+except Exception:
+    class Translator:
+        def translate(self, text, dest="en"):
+            class Result:
+                def __init__(self, value):
+                    self.text = value
+
+            return Result(text)
 
 app = FastAPI()
 
 translator = Translator()
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "OK"}
 
 
 class AudioResponse(BaseModel):
@@ -71,11 +86,24 @@ async def analyze_audio(file: UploadFile = File(...)):
             detail="Invalid file type. Please upload a WAV audio file only."
         )
 
-    if file.content_type not in ["audio/wav", "audio/x-wav"]:
-        raise HTTPException(
-            status_code=415,
-            detail="Invalid audio format. Only WAV audio files are supported."
-        )
+    # Accept common WAV MIME types and variants
+    allowed_mime_types = [
+        "audio/wav",
+        "audio/x-wav", 
+        "audio/wave",
+        "audio/x-wave",
+        "audio/vnd.wav",
+        "audio/vnd.wave",
+        "application/octet-stream"
+    ]
+    
+    if file.content_type and file.content_type not in allowed_mime_types:
+        # Still allow if content-type starts with "audio/" as fallback
+        if not file.content_type.startswith("audio/"):
+            raise HTTPException(
+                status_code=415,
+                detail=f"Invalid audio format. Detected MIME type: {file.content_type}. Only WAV audio files are supported."
+            )
 
     temp_file = "temp.wav"
 
