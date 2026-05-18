@@ -1,6 +1,16 @@
 import speech_recognition as sr
-from googletrans import Translator
 from new_risk_test import predict
+
+try:
+    from googletrans import Translator
+except Exception:
+    class Translator:
+        def translate(self, text, dest="en"):
+            class Result:
+                def __init__(self, value):
+                    self.text = value
+
+            return Result(text)
 
 print("🚀 Script started...")
 
