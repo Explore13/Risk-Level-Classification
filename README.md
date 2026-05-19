@@ -21,10 +21,10 @@ The **Risk-Level-Classification API** is a FastAPI-based service that processes 
 
 ```bash
 # Start the development server with auto-reload
-uvicorn api:app --reload
+uvicorn app:app --reload
 
 # Start the production server
-uvicorn api:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at `http://localhost:8000`
@@ -118,7 +118,8 @@ fetch("http://localhost:8000/analyze_audio", {
 {
   "original_text": "The extracted text from the audio file",
   "translated_text": "The translated text in English (if different from original)",
-  "risk_level": "LOW|MEDIUM|HIGH"
+  "risk_level": "LOW|MEDIUM|HIGH",
+  "score": 92.34
 }
 ```
 
@@ -130,6 +131,7 @@ fetch("http://localhost:8000/analyze_audio", {
   - `LOW`: Content poses minimal risk
   - `MEDIUM`: Content poses moderate risk
   - `HIGH`: Content poses significant risk
+- `score` (float): Confidence score for the predicted `risk_level` expressed as a percentage (0-100)
 
 ---
 
@@ -210,9 +212,10 @@ Response model for the `/analyze_audio` endpoint.
 
 ```python
 {
-    "original_text": str,      # Extracted text from audio
-    "translated_text": str,    # Text translated to English
-    "risk_level": str          # Classification: LOW, MEDIUM, or HIGH
+  "original_text": str,      # Extracted text from audio
+  "translated_text": str,    # Text translated to English
+  "risk_level": str,         # Classification: LOW, MEDIUM, or HIGH
+  "score": float             # Confidence score for the predicted risk_level (0-100)
 }
 ```
 
@@ -258,7 +261,8 @@ Response model for the `/analyze_audio` endpoint.
         │  Return Response         │
         │  {original_text,         │
         │   translated_text,       │
-        │   risk_level}            │
+        │   risk_level,            │
+        │   score}                 │
         └──────────────────────────┘
 ```
 
@@ -285,6 +289,22 @@ Response model for the `/analyze_audio` endpoint.
 - **Input**: Text content
 - **Output**: Risk classification with confidence score
 - **Categories**: LOW, MEDIUM, HIGH
+
+### Model Loading Behavior
+
+- The application attempts to load the Hugging Face model pipeline at FastAPI startup.
+- If the model fails to load at startup, the service will attempt a lazy load on the first `/analyze_audio` request.
+- If the model is still unavailable, the endpoint returns `503 Model not loaded`.
+
+### Translation & Speech Recognition Notes
+
+- Translation uses `googletrans` when available; if the library or service fails the app falls back to returning the original text.
+- Speech recognition uses Google's recognizer via the `SpeechRecognition` library. Typical failures include `UnknownValueError` (intelligibility) and `RequestError` (service/network). These will return a `400` or `502` respectively with a short message.
+
+### WAV / Codec Limitations
+
+- The service uses Python's `wave` module to validate WAV files and measure duration. `wave` supports standard PCM WAV files; compressed or non-PCM WAV variants may be rejected with `Invalid WAV file`.
+- For broader codec support consider `pydub` or `soundfile`.
 
 ### Dependencies
 

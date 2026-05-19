@@ -84,14 +84,58 @@ def wav_to_text(wav_file):
  
     with sr.AudioFile(wav_file) as source:
         audio = recognizer.record(source)
- 
-    text = recognizer.recognize_google(audio)
-    return text
+
+    try:
+        text = recognizer.recognize_google(audio)
+        return text
+
+    except sr.UnknownValueError:
+        # Speech was unintelligible
+        raise HTTPException(status_code=400, detail="Speech could not be understood")
+
+    except sr.RequestError as e:
+        # API was unreachable or unresponsive
+        print("Speech recognition request error:", e)
+        raise HTTPException(status_code=502, detail="Speech recognition service error")
+
+    except Exception as e:
+        print("Unexpected error during speech recognition:", e)
+        raise HTTPException(status_code=500, detail="Internal speech recognition error")
  
  
 def translate_to_english(text):
-    translated = translator.translate(text, dest='en')
-    return translated.text
+    try:
+        translated = translator.translate(text, dest='en')
+        return translated.text
+    except Exception as e:
+        # Fallback: return original text if translation fails
+        print("Translation failed, returning original text:", e)
+        return text
+
+
+def ensure_model_loaded():
+    """Ensure the Hugging Face pipeline is loaded. Try to lazy-load if missing."""
+    global model_pipeline
+    if model_pipeline is not None:
+        return
+
+    try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+        model_pipeline = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer
+        )
+
+        print("✅ Model pipeline loaded lazily.")
+
+    except Exception as e:
+        model_pipeline = None
+        print("⚠️ Failed to load model lazily:", e)
  
  
 # -------------------------------
@@ -149,17 +193,26 @@ async def analyze_audio(file: UploadFile = File(...)):
         original_text = wav_to_text(temp_file)
         translated_text = translate_to_english(original_text)
  
+        # Ensure model is loaded (attempt lazy load if needed)
+        if model_pipeline is None:
+            ensure_model_loaded()
+
         if model_pipeline is None:
             raise HTTPException(status_code=503, detail="Model not loaded")
- 
+
         result = model_pipeline(translated_text)
+        # Validate pipeline output
+        if not result or not isinstance(result, list) or "label" not in result[0] or "score" not in result[0]:
+            print("Unexpected model output:", result)
+            raise HTTPException(status_code=500, detail="Invalid model prediction")
         risk = result[0]["label"]
         score = result[0]["score"]
  
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("Error during audio analysis:", e)
+        raise HTTPException(status_code=500, detail="Internal processing error")
     finally:
         os.remove(temp_file)  # Always cleaned up, even if an error occurs
  
