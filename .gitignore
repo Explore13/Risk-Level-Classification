@@ -23,4 +23,3 @@ checkpoint-*/
 *.pth
 *.bin
 *.safetensorsaudio/
-audio/
