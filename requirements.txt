@@ -3,13 +3,11 @@ torch
 accelerate
 sentencepiece
 huggingface-hub
-
 fastapi
 uvicorn
 pydantic
 python-multipart
-
 SpeechRecognition
-
 numpy
 requests
+googletrans==4.0.0rc1
