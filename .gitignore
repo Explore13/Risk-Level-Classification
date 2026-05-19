@@ -22,4 +22,4 @@ checkpoint-*/
 *.pt
 *.pth
 *.bin
-*.safetensors
+*.safetensorsaudio/
