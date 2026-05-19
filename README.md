@@ -59,6 +59,20 @@ curl -X GET "http://localhost:8000/health"
 
 ---
 
+### Root
+
+**Endpoint**: `GET /`
+
+**Description**: Basic root message confirming the API is running.
+
+**Example**:
+
+```bash
+curl -X GET "http://localhost:8000/"
+```
+
+---
+
 ### 2. Analyze Audio
 
 **Endpoint**: `POST /analyze_audio`
@@ -117,9 +131,10 @@ fetch("http://localhost:8000/analyze_audio", {
 ```json
 {
   "original_text": "The extracted text from the audio file",
+  "romanized_text": "Romanized/phonetic (if applicable)",
   "translated_text": "The translated text in English (if different from original)",
   "risk_level": "LOW|MEDIUM|HIGH",
-  "score": 92.34
+  "score": 0.92
 }
 ```
 
@@ -131,7 +146,8 @@ fetch("http://localhost:8000/analyze_audio", {
   - `LOW`: Content poses minimal risk
   - `MEDIUM`: Content poses moderate risk
   - `HIGH`: Content poses significant risk
-- `score` (float): Confidence score for the predicted `risk_level` expressed as a percentage (0-100)
+- `score` (float): Confidence score for the predicted `risk_level` expressed as a decimal between 0 and 1
+- `romanized_text` (string): Romanized/phonetic transcription of the original text when input was in a non-Latin script or romanized speech (e.g., Hinglish/Banglish)
 
 ---
 
@@ -213,9 +229,10 @@ Response model for the `/analyze_audio` endpoint.
 ```python
 {
   "original_text": str,      # Extracted text from audio
+  "romanized_text": str,     # Romanized/phonetic transcription (when applicable)
   "translated_text": str,    # Text translated to English
   "risk_level": str,         # Classification: LOW, MEDIUM, or HIGH
-  "score": float             # Confidence score for the predicted risk_level (0-100)
+  "score": float             # Confidence score for the predicted risk_level (decimal 0-1)
 }
 ```
 
@@ -224,46 +241,54 @@ Response model for the `/analyze_audio` endpoint.
 ## Processing Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Upload WAV Audio File                        │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-        ┌───────────────────────────┐
-        │  File Validation          │
-        │  - Extension: .wav        │
-        │  - MIME type check        │
-        │  - Duration: ≤ 30 seconds │
-        └────────┬──────────────────┘
-                 │
-                 ▼
-      ┌──────────────────────────┐
-      │  Speech Recognition      │
-      │  (Google SR API)         │
-      │  Audio → Text (Original) │
-      └────────┬─────────────────┘
-               │
-               ▼
-      ┌──────────────────────────┐
-      │  Language Translation    │
-      │  → English               │
-      └────────┬─────────────────┘
-               │
-               ▼
-      ┌──────────────────────────┐
-      │  Risk Classification     │
-      │  (Hugging Face Model)    │
-      │  Text → Risk Level       │
-      └────────┬─────────────────┘
-               │
-               ▼
-        ┌──────────────────────────┐
-        │  Return Response         │
-        │  {original_text,         │
-        │   translated_text,       │
-        │   risk_level,            │
-        │   score}                 │
-        └──────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                      Upload WAV Audio File                              │
+└──────────────────────────────┬───────────────────────────────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  File Validation                   │
+        │  - Extension: .wav                 │
+        │  - MIME type check                 │
+        │  - Duration: ≤ 30 seconds          │
+        └────────────────┬───────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  Speech Recognition (two-pass)     │
+        │  1) Rough English STT (en-US)      │
+        │  2) Detect language (langdetect +  │
+        │     heuristics)                    │
+        │  3) Re-run STT with detected code  │
+        └────────────────┬───────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  Transliteration / Romanization    │
+        │  - Produce `romanized_text` for    │
+        │    non-Latin or romanized speech   │
+        └────────────────┬───────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  Translation to English            │
+        │  (deep-translator GoogleTranslator)│
+        └────────────────┬───────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  Risk Classification               │
+        │  (Hugging Face pipeline)           │
+        │  -> `risk_level`, `score` (0-1)    │
+        └────────────────┬───────────────────┘
+             │
+             ▼
+        ┌────────────────────────────────────┐
+        │  Return Response                   │
+        │  {original_text, romanized_text,   │
+        │   translated_text, risk_level,     │
+        │   score}                            │
+        └────────────────────────────────────┘
 ```
 
 ---
@@ -278,9 +303,9 @@ Response model for the `/analyze_audio` endpoint.
 
 ### Translation
 
-- **Service**: Google Translate (via `googletrans` library, with fallback to passthrough)
+- **Service**: deep-translator (`GoogleTranslator`) for stable, server-safe translation
 - **Target Language**: English
-- **Fallback**: If translation service unavailable, returns original text
+- **Fallback**: If translation fails, the original text is returned
 
 ### Risk Classification
 
@@ -298,8 +323,13 @@ Response model for the `/analyze_audio` endpoint.
 
 ### Translation & Speech Recognition Notes
 
-- Translation uses `googletrans` when available; if the library or service fails the app falls back to returning the original text.
-- Speech recognition uses Google's recognizer via the `SpeechRecognition` library. Typical failures include `UnknownValueError` (intelligibility) and `RequestError` (service/network). These will return a `400` or `502` respectively with a short message.
+- Translation uses `deep-translator` (`GoogleTranslator`) with a fallback to the original text on errors.
+- Language detection uses `langdetect` plus heuristic keyword checks for Hinglish/Banglish and maps detected codes to Google STT language codes via a `LANG_MAP`.
+- The speech-to-text flow is two-pass:
+  1. Rough English STT (`en-US`) to get initial text for language detection
+  2. Detect language and re-run STT with the detected Google STT code
+- The service also attempts to produce a `romanized_text` (phonetic/roman script) using the Google translate web endpoint when input is in a non-Latin script or romanized speech.
+- Speech recognition failures may produce 500 responses with diagnostic messages (see logs). If the model is not loaded the endpoint returns `503 Model not loaded`.
 
 ### WAV / Codec Limitations
 
@@ -316,6 +346,8 @@ Response model for the `/analyze_audio` endpoint.
 - **torch** (2.12.0+): Deep learning framework
 - **numpy** (2.4.5+): Numerical computing
 - **requests** (2.34.2+): HTTP library
+- **deep-translator**: Stable translation (`GoogleTranslator`)
+- **langdetect**: Language detection heuristics
 
 ---
 
