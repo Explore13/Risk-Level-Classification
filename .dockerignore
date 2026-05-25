@@ -1,0 +1,12 @@
+# Ignore local env and build artifacts to avoid leaking secrets into images
+.env
+.env.*
+.venv
+venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.git
+dist
+build
+node_modules

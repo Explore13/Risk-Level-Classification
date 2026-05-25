@@ -19,9 +19,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# Language map — langdetect code → Google STT code
+# Language map — Whisper language code → Google STT code
 # =========================================================
-LANG_MAP = {
+WHISPER_TO_STT = {
     "hi": "hi-IN",
     "bn": "bn-IN",
     "en": "en-US",
@@ -46,28 +46,53 @@ LANG_MAP = {
 }
 
 # =========================================================
-# Model
+# Models
 # =========================================================
 model_name = "sohampal0011/risk-classifier"
 model_pipeline = None
+whisper_model = None
 
 app = FastAPI()
 
 
 @app.on_event("startup")
-def load_model():
-    global model_pipeline
-    logger.info("🚀 Loading model: %s", model_name)
+def load_models():
+    global model_pipeline, whisper_model
+
+    # --- Load Whisper for language detection only ---
+    logger.info("🚀 Loading Whisper model (medium) for language detection...")
     try:
+        import whisper
+        whisper_model = whisper.load_model("medium")
+        logger.info("✅ Whisper model loaded successfully.")
+    except Exception as e:
+        whisper_model = None
+        logger.error("⚠️ Failed to load Whisper model: %s", e)
+
+    # --- Load risk classifier ---
+    logger.info("🚀 Loading risk classifier: %s", model_name)
+    try:
+        import torch
+        import transformers
         from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
+        logger.info("📦 transformers==%s | torch==%s", transformers.__version__, torch.__version__)
+
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        model_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer)
-        logger.info("✅ Model pipeline loaded successfully.")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            ignore_mismatched_sizes=True,
+        )
+        model_pipeline = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer,
+            device=-1,
+        )
+        logger.info("✅ Risk classifier loaded successfully.")
     except Exception as e:
         model_pipeline = None
-        logger.error("⚠️ Failed to load model: %s", e)
+        logger.error("⚠️ Failed to load risk classifier: %s", e)
 
 
 @app.get("/")
@@ -102,9 +127,9 @@ def validate_wav(file_path):
                 "🎵 WAV info — duration: %.2fs | sample_rate: %dHz | channels: %d",
                 duration, rate, channels,
             )
-            if duration > 30:
-                logger.warning("❌ Audio too long: %.2fs (max 30s)", duration)
-                return False, "Audio too long (max 30 seconds)"
+            if duration > 35:
+                logger.warning("❌ Audio too long: %.2fs (max 35s)", duration)
+                return False, "Audio too long (max 35 seconds)"
             return True, "Valid WAV file"
     except Exception as e:
         logger.error("❌ WAV validation failed: %s", e)
@@ -112,7 +137,7 @@ def validate_wav(file_path):
 
 
 # =========================================================
-# Translate using deep-translator (stable, server-safe)
+# Translate to English
 # =========================================================
 def translate_to_english(text):
     logger.info("🔄 Translating to English: %s", text)
@@ -127,68 +152,12 @@ def translate_to_english(text):
 
 
 # =========================================================
-# Detect language using deep-translator
-# =========================================================
-def detect_language(text):
-    """
-    Use deep-translator's GoogleTranslator to detect language.
-    Returns a Google STT language code like 'hi-IN'.
-    """
-    try:
-        from deep_translator import GoogleTranslator
-        detected = GoogleTranslator(source="auto", target="en").translate(text)
-        # deep-translator doesn't expose detected lang directly,
-        # so we use langdetect as fallback but with a Hinglish-aware check
-        from langdetect import detect, DetectorFactory
-        DetectorFactory.seed = 0  # makes langdetect deterministic
-        lang_code = detect(text)
-        logger.info("🌐 langdetect raw code: %s", lang_code)
-
-        text_lower = text.lower()
-        words = text_lower.split()
-
-        # Hinglish (Hindi romanized) markers
-        hindi_markers = [
-            "hai", "mujhe", "koi", "raha", "lag", "dar", "nahi",
-            "aur", "ko", "ka", "ki", "ke", "hoon", "tum", "yeh",
-            "woh", "kya", "main", "mere", "tera", "apna", "bahut",
-        ]
-        hindi_count = sum(1 for w in hindi_markers if w in words)
-        if hindi_count >= 2:
-            logger.info("🌐 Hinglish detected via keyword match (%d markers) → hi-IN", hindi_count)
-            return "hi-IN"
-
-        # Banglish (Bengali romanized) markers
-        bengali_markers = [
-            "ami", "amake", "amar", "tumi", "tomake", "apni", "apnake",
-            "dao", "thakte", "ache", "hobe", "koro", "kori", "jabo",
-            "asbo", "ebar", "ekhane", "okhane", "bhalo", "moto", "kintu",
-            "tahole", "diye", "niye", "jai", "chai", "ki", "ke", "ba",
-        ]
-        bengali_count = sum(1 for w in bengali_markers if w in words)
-        if bengali_count >= 2:
-            logger.info("🌐 Banglish detected via keyword match (%d markers) → bn-IN", bengali_count)
-            return "bn-IN"
-
-        stt_code = LANG_MAP.get(lang_code, "en-US")
-        logger.info("🌐 Language detected: %s → STT code: %s", lang_code, stt_code)
-        return stt_code
-
-    except Exception as e:
-        logger.warning("⚠️ Language detection failed: %s — defaulting to en-US", e)
-        return "en-US"
-
-
-
-
-# =========================================================
 # Transliterate to Roman script
 # =========================================================
 def transliterate_to_roman(text, detected_lang_code):
     """Convert native script text to Roman script using Google Translate."""
     logger.info("🔤 Romanizing text (lang: %s): %s", detected_lang_code, text)
 
-    # If already Roman script (English or other Latin-script languages), return as-is
     latin_langs = {"en-US", "fr-FR", "de-DE", "es-ES", "pt-BR", "it-IT"}
     if detected_lang_code in latin_langs:
         logger.info("ℹ️ Already Roman script, returning as-is")
@@ -196,20 +165,17 @@ def transliterate_to_roman(text, detected_lang_code):
 
     try:
         import requests
-
-        # Google Translate returns pronunciation (romanization) in its raw API response
         url = "https://translate.googleapis.com/translate_a/single"
         params = {
             "client": "gtx",
-            "sl":  detected_lang_code.split("-")[0],  # e.g. "bn" from "bn-IN"
+            "sl": detected_lang_code.split("-")[0],  # e.g. "bn" from "bn-IN"
             "tl": "en",
-            "dt": ["t", "rm"],   # rm = romanization
+            "dt": ["t", "rm"],                       # rm = romanization
             "q": text,
         }
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
-        # Romanization is in data[0][i][3] for each sentence chunk
         romanized_parts = []
         for chunk in data[0]:
             if chunk and len(chunk) > 3 and chunk[3]:
@@ -227,55 +193,72 @@ def transliterate_to_roman(text, detected_lang_code):
         logger.warning("⚠️ Romanization failed: %s — returning original text", e)
         return text
 
+
 # =========================================================
-# Speech to text
+# Language detection via Whisper (audio-based, most reliable)
+# =========================================================
+def detect_language_whisper(wav_file):
+    """
+    Use Whisper's audio-based language detection.
+    This is far more reliable than text-based detection because it
+    operates on acoustic features, not transcribed text — so it never
+    confuses Hindi/Bengali/English regardless of script or romanization.
+    Returns a Google STT language code (e.g. 'bn-IN').
+    """
+    if whisper_model is None:
+        logger.warning("⚠️ Whisper model not loaded — defaulting to en-US")
+        return "en-US"
+
+    try:
+        import whisper
+        logger.info("🎧 Detecting language from audio using Whisper...")
+        audio = whisper.load_audio(wav_file)
+        audio_clip = whisper.pad_or_trim(audio)          # first 30s is enough
+        mel = whisper.log_mel_spectrogram(audio_clip).to(whisper_model.device)
+        _, probs = whisper_model.detect_language(mel)
+        detected_lang = max(probs, key=probs.get)
+        confidence = probs[detected_lang] * 100
+        stt_code = WHISPER_TO_STT.get(detected_lang, "en-US")
+        logger.info(
+            "🌐 Whisper detected language: %s (confidence: %.2f%%) → STT code: %s",
+            detected_lang, confidence, stt_code,
+        )
+        return stt_code
+    except Exception as e:
+        logger.error("❌ Whisper language detection failed: %s — defaulting to en-US", e)
+        return "en-US"
+
+
+# =========================================================
+# Speech to text via Google STT (native script output)
 # =========================================================
 def wav_to_text(wav_file):
+    """
+    Step 1 — Detect language from audio using Whisper (audio-based, reliable).
+    Step 2 — Transcribe with Google STT using the detected language code.
+             Google STT returns native script (Bengali, Devanagari, etc.)
+             which feeds cleanly into romanization and translation.
+    """
     recognizer = sr.Recognizer()
 
     with sr.AudioFile(wav_file) as source:
         audio = recognizer.record(source)
 
-    # Step 1: Rough English transcript for language detection
-    logger.info("🎧 Step 1 — Running rough English STT for language detection...")
-    try:
-        rough_text = recognizer.recognize_google(audio, language="en-US")
-        logger.info("📝 Rough text (en-US): %s", rough_text)
-    except sr.UnknownValueError:
-        rough_text = ""
-        logger.warning("⚠️ Could not understand audio — no speech detected")
-    except sr.RequestError as e:
-        rough_text = ""
-        logger.error("❌ Google STT API error in Step 1: %s", e)
-    except Exception as e:
-        rough_text = ""
-        logger.error("❌ Unexpected error in Step 1: %s", e)
+    # ── Step 1: Whisper language detection ───────────────────────────────────
+    detected_lang = detect_language_whisper(wav_file)
 
-    # Step 2: Detect language from rough text
-    if rough_text:
-        detected_lang = detect_language(rough_text)
-    else:
-        detected_lang = "en-US"
-        logger.info("🌐 Step 2 — No rough text, skipping detection, using en-US")
-
-    # Step 3: Re-recognize with correct language
-    logger.info("🎧 Step 3 — Re-running STT with language: %s", detected_lang)
+    # ── Step 2: Google STT with detected language → native script ────────────
+    logger.info("📝 Transcribing with Google STT (lang=%s)...", detected_lang)
     try:
         text = recognizer.recognize_google(audio, language=detected_lang)
-        logger.info("📝 Final transcribed text: %s", text)
+        logger.info("📄 Transcribed text (%s): %s", detected_lang, text)
         return text, detected_lang
     except sr.UnknownValueError:
-        if rough_text:
-            logger.warning("⚠️ Re-recognition failed, using rough text: %s", rough_text)
-            return rough_text, detected_lang
-        logger.error("❌ Could not recognize speech in any language")
+        logger.error("❌ Google STT could not understand audio with lang=%s", detected_lang)
         raise Exception("Could not recognize speech - no audio detected")
     except sr.RequestError as e:
-        logger.error("❌ Google STT API error in Step 3: %s", e)
+        logger.error("❌ Google STT API error: %s", e)
         raise Exception(f"Speech recognition service error: {e}")
-    except Exception as e:
-        logger.error("❌ Unexpected STT error in Step 3: %s", e)
-        raise Exception(f"Speech recognition failed: {e}")
 
 
 # =========================================================
@@ -299,7 +282,6 @@ async def analyze_audio(file: UploadFile = File(...)):
         "audio/x-wave", "audio/vnd.wav", "audio/vnd.wave",
         "application/octet-stream",
     ]
-
     if file.content_type and file.content_type not in allowed_mime_types:
         if not file.content_type.startswith("audio/"):
             logger.warning("❌ Invalid MIME type: %s", file.content_type)
@@ -308,36 +290,26 @@ async def analyze_audio(file: UploadFile = File(...)):
                 detail=f"Invalid audio format. Detected MIME type: {file.content_type}. Only WAV audio files are supported.",
             )
 
-    # Save to temp file
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             temp_file = tmp.name
             shutil.copyfileobj(file.file, tmp)
-
         file_size_kb = os.path.getsize(temp_file) / 1024
         logger.info("💾 File saved — temp path: %s | size: %.2f KB", temp_file, file_size_kb)
-
     except Exception as e:
         logger.error("❌ Error saving file: %s", e)
         raise HTTPException(status_code=500, detail="Error saving the uploaded file.")
 
-    # Validate WAV
     is_valid, message = validate_wav(temp_file)
     if not is_valid:
         os.remove(temp_file)
         raise HTTPException(status_code=400, detail=message)
 
     try:
-        # STT
         original_text, detected_lang = wav_to_text(temp_file)
-
-        # Transliterate to Roman
         romanized_text = transliterate_to_roman(original_text, detected_lang)
-
-        # Translate
         translated_text = translate_to_english(original_text)
 
-        # Classify
         if model_pipeline is None:
             logger.error("❌ Model pipeline is not loaded")
             raise HTTPException(status_code=503, detail="Model not loaded")
