@@ -180,19 +180,13 @@ We tried multiple approaches before arriving at this design:
 
 ## API Endpoints
 
-### 1. Root — `GET /`
-
-```json
-{ "message": "Risk Level Classification API is running!" }
-```
-
-### 2. Health Check — `GET /health`
+### 1. Health Check — `GET /health`
 
 ```json
 { "status": "OK" }
 ```
 
-### 3. Analyze Audio — `POST /analyze_audio`
+### 2. Analyze Audio — `POST /analyze_audio`
 
 **Request:** `multipart/form-data` with field `file` (WAV audio)
 
@@ -206,7 +200,7 @@ We tried multiple approaches before arriving at this design:
 
 ```json
 {
-  "original_text": "মুঝে ডর লাগ রাহা হ্যায়",
+  "original_text": "मुझे डर लग रहा है",
   "romanized_text": "mujhe dar lag raha hai",
   "translated_text": "I am feeling scared",
   "risk_level": "High",
